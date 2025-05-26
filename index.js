@@ -29,6 +29,7 @@ class Config {
             first_place_role_id: 1375987414191046768,
             second_place_role_id: 1376317085537271989,
             third_place_role_id: 1376317084392357968,
+            admin_role_id: null,
             event_active: false,
             voting_active: false,
             blacklisted_roles: [],
@@ -136,6 +137,26 @@ const safeExecute = async (fn, errorMessage = 'Unknown error') => {
         return null;
     }
 };
+
+function hasAdminPermission(interaction) {
+    if (!config.data.admin_role_id) {
+        return true;
+    }
+    
+    const hasAdminRole = interaction.member.roles.cache.has(config.data.admin_role_id);
+    return hasAdminRole;
+}
+
+async function checkAdminPermission(interaction) {
+    if (!hasAdminPermission(interaction)) {
+        await interaction.reply({ 
+            content: '❌ Você não tem permissão para usar este comando!', 
+            ephemeral: true 
+        });
+        return false;
+    }
+    return true;
+}
 
 async function loadParticipants() {
     return await safeExecute(async () => {
@@ -431,6 +452,23 @@ client.once('ready', async () => {
                 option.setName('cargo')
                     .setDescription('Cargo que será dado aos participantes')
                     .setRequired(true)
+            ),
+        new SlashCommandBuilder()
+            .setName('configurar_cargo_admin')
+            .setDescription('Configurar cargo de administrador')
+            .addRoleOption(option =>
+                option.setName('cargo')
+                    .setDescription('Cargo que terá acesso aos comandos administrativos')
+                    .setRequired(true)
+            ),
+        new SlashCommandBuilder()
+            .setName('configurar_canal_votacao')
+            .setDescription('Configurar canal de votação')
+            .addChannelOption(option =>
+                option.setName('canal')
+                    .setDescription('Canal para votação')
+                    .addChannelTypes(ChannelType.GuildText)
+                    .setRequired(true)
             )
     ];
 
@@ -446,7 +484,7 @@ client.on('interactionCreate', async interaction => {
         } else if (interaction.isModalSubmit()) {
             await handleModalSubmit(interaction);
         } else if (interaction.isChatInputCommand()) {
-            await handleSlashCommand(interaction);
+            await handleSlashCommandWithPermission(interaction);
         }
     }, 'Error handling interaction');
 });
@@ -584,16 +622,13 @@ async function handleButtonInteraction(interaction) {
         const participants = await loadParticipants();
 
         if (participants.includes(userId)) {
-            // Remove da lista de participantes
             const newParticipants = participants.filter(id => id !== userId);
             await saveParticipants(newParticipants);
 
-            // Remove submissão
             delete botPrefs.submissions[userId];
             await botPrefs.saveToGithub();
             await deleteUserDataFromGithub(userId);
 
-            // Remove o cargo de participante
             if (config.data.participant_role_id) {
                 try {
                     const role = interaction.guild.roles.cache.get(config.data.participant_role_id);
@@ -641,7 +676,6 @@ async function handleModalSubmit(interaction) {
         const participants = await loadParticipants();
 
         if (!participants.includes(userId)) {
-            // Adiciona à lista de participantes
             participants.push(userId);
             await saveParticipants(participants);
 
@@ -655,7 +689,6 @@ async function handleModalSubmit(interaction) {
             await saveUserData(userId, userData);
             await saveUserDataToGithub(userId, userData);
 
-            // Adiciona o cargo de participante
             if (config.data.participant_role_id) {
                 try {
                     const role = interaction.guild.roles.cache.get(config.data.participant_role_id);
@@ -717,10 +750,41 @@ async function handleModalSubmit(interaction) {
     }
 }
 
-async function handleSlashCommand(interaction) {
+async function handleSlashCommandWithPermission(interaction) {
     const { commandName } = interaction;
 
+    const adminCommands = [
+        'evento_stats',
+        'evento_menu', 
+        'evento_blacklistcargo',
+        'evento_blacklistmembro',
+        'enviar_menu',
+        'sync_github',
+        'evento_avisar',
+        'evento_finalizar',
+        'final_vote',
+        'configurar_cargo_participante',
+        'configurar_cargo_admin',
+        'configurar_canal_votacao'
+    ];
+
+    if (adminCommands.includes(commandName)) {
+        if (!hasAdminPermission(interaction)) {
+            return await interaction.reply({ 
+                content: '❌ Você não tem permissão para usar este comando!', 
+                ephemeral: true 
+            });
+        }
+    }
+
     switch (commandName) {
+        case 'configurar_cargo_admin':
+            const adminRole = interaction.options.getRole('cargo');
+            config.data.admin_role_id = adminRole.id;
+            await config.saveConfig();
+            await interaction.reply(`✅ Cargo de administrador configurado: ${adminRole.name}`);
+            break;
+
         case 'configurar_cargo_participante':
             const cargo_participante = interaction.options.getRole('cargo');
             config.data.participant_role_id = cargo_participante.id;
@@ -824,7 +888,8 @@ async function handleSlashCommand(interaction) {
 
             await interaction.reply(`✅ Anúncio enviado para ${sentCount} participantes!`);
             break;
-case 'evento_finalizar':
+
+        case 'evento_finalizar':
             if (botPrefs.menu_message_id && botPrefs.menu_channel_id) {
                 const channel = client.channels.cache.get(botPrefs.menu_channel_id);
                 if (channel) {
@@ -844,12 +909,10 @@ case 'evento_finalizar':
 
             const finalParticipants = await loadParticipants();
             
-            // Clear all data
             await saveParticipants([]);
             botPrefs.submissions = {};
             await botPrefs.saveToGithub();
 
-            // Remove participant roles from all users
             if (config.data.participant_role_id) {
                 try {
                     const role = interaction.guild.roles.cache.get(config.data.participant_role_id);
@@ -882,9 +945,26 @@ case 'evento_finalizar':
                 return await interaction.reply('❌ Canal de votação não configurado!');
             }
 
-            const votingChannel = client.channels.cache.get(config.data.voting_channel_id);
+            // Debug: log id e tipo
+            console.log('Tentando buscar canal de votação:', config.data.voting_channel_id, typeof config.data.voting_channel_id);
+
+            let votingChannel = client.channels.cache.get(String(config.data.voting_channel_id));
             if (!votingChannel) {
+                try {
+                    votingChannel = await client.channels.fetch(String(config.data.voting_channel_id));
+                } catch (e) {
+                    console.error('Erro ao buscar canal com fetch:', e);
+                    votingChannel = null;
+                }
+            }
+            if (!votingChannel) {
+                console.error('Canal não encontrado nem no cache nem no fetch:', config.data.voting_channel_id);
                 return await interaction.reply('❌ Canal de votação não encontrado!');
+            }
+            // Verifica se é canal de texto
+            if (votingChannel.type !== ChannelType.GuildText && votingChannel.type !== 0) {
+                console.error('Canal encontrado, mas não é de texto:', votingChannel.id, votingChannel.type);
+                return await interaction.reply('❌ O canal de votação não é um canal de texto!');
             }
 
             config.data.voting_active = true;
@@ -911,7 +991,6 @@ case 'evento_finalizar':
 
             const votingMsg = await votingChannel.send({ embeds: [embed] });
 
-            // Add reactions
             for (let i = 0; i < submissions.length && i < 10; i++) {
                 await votingMsg.react(reactions[i]);
             }
@@ -928,7 +1007,6 @@ case 'evento_finalizar':
 client.on('messageCreate', async message => {
     if (message.author.bot) return;
     
-    // Auto-react to submissions in submission channel
     if (message.channel.id === config.data.submission_channel_id) {
         await safeExecute(async () => {
             await message.react('👍');
@@ -944,13 +1022,11 @@ client.on('guildMemberAdd', member => {
 client.on('guildMemberRemove', async member => {
     console.log(`${member.user.tag} left the server`);
     
-    // Remove from participants if they were in the tournament
     const participants = await loadParticipants();
     if (participants.includes(member.id)) {
         const newParticipants = participants.filter(id => id !== member.id);
         await saveParticipants(newParticipants);
         
-        // Remove their submission
         delete botPrefs.submissions[member.id];
         await botPrefs.saveToGithub();
         await deleteUserDataFromGithub(member.id);
@@ -960,7 +1036,6 @@ client.on('guildMemberRemove', async member => {
     }
 });
 
-// Error handling
 client.on('error', error => {
     console.error('Discord client error:', error);
 });
@@ -974,7 +1049,6 @@ process.on('uncaughtException', error => {
     process.exit(1);
 });
 
-// Graceful shutdown
 process.on('SIGINT', () => {
     console.log('Received SIGINT, shutting down gracefully...');
     client.destroy();
