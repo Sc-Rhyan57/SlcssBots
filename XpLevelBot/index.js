@@ -194,22 +194,19 @@ client.on('messageCreate', async (message) => {
     if (message.author.bot || message.guild?.id !== config.guildId) return;
     
     // Sistema de Contagem - ANTES do sistema de XP
-    const countingData = await getGitHubFile('counting.json');
-    if (countingData[message.guild.id] && message.channel.id === countingData[message.guild.id].channelId) {
-        const countingCommand = client.commands.get('configurar-contagem');
-        if (countingCommand && countingCommand.handleCountingMessage) {
-            try {
-                await countingCommand.handleCountingMessage(message, countingData[message.guild.id], { 
-                    getGitHubFile, 
-                    updateGitHubFile, 
-                    config 
-                });
-            } catch (error) {
-                console.error('Erro no sistema de contagem:', error);
-            }
+    const countingCommand = client.commands.get('configurar-contagem');
+    if (countingCommand && countingCommand.handleCountingMessage) {
+        try {
+            await countingCommand.handleCountingMessage(message, null, { 
+                getGitHubFile, 
+                updateGitHubFile, 
+                config 
+            });
+        } catch (error) {
+            console.error('Erro no sistema de contagem:', error);
         }
-        // NÃO colocar return aqui - deixa continuar para ganhar XP
     }
+    // NÃO colocar return aqui - deixa continuar para ganhar XP
     
     const userId = message.author.id;
     const now = Date.now();
