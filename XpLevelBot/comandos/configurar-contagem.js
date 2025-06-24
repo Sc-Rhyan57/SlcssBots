@@ -1,5 +1,8 @@
 const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 
+const countingChannels = new Map();
+const countingCooldowns = new Map();
+
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('configurar-contagem')
@@ -40,49 +43,40 @@ module.exports = {
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
     async execute(interaction, helpers) {
-        const { getGitHubFile, updateGitHubFile } = helpers;
         const subcommand = interaction.options.getSubcommand();
         const guildId = interaction.guild.id;
 
         switch (subcommand) {
             case 'iniciar':
-                await this.handleStart(interaction, guildId, getGitHubFile, updateGitHubFile);
+                await this.handleStart(interaction, guildId);
                 break;
             case 'parar':
-                await this.handleStop(interaction, guildId, getGitHubFile, updateGitHubFile);
+                await this.handleStop(interaction, guildId);
                 break;
             case 'status':
-                await this.handleStatus(interaction, guildId, getGitHubFile);
+                await this.handleStatus(interaction, guildId);
                 break;
             case 'reset':
-                await this.handleReset(interaction, guildId, getGitHubFile, updateGitHubFile);
+                await this.handleReset(interaction, guildId);
                 break;
         }
     },
 
-    async handleStart(interaction, guildId, getGitHubFile, updateGitHubFile) {
+    async handleStart(interaction, guildId) {
         const channel = interaction.options.getChannel('canal');
         const startNumber = interaction.options.getInteger('numero-inicial') || 1;
 
-        const countingData = await getGitHubFile('counting.json');
-        
-        if (!countingData[guildId]) {
-            countingData[guildId] = {};
-        }
-
-        countingData[guildId] = {
+        countingChannels.set(channel.id, {
+            guildId: guildId,
             channelId: channel.id,
-            currentNumber: startNumber,
-            lastUserId: null,
-            totalCount: 0,
             enabled: true,
+            currentNumber: startNumber,
             records: {
-                highest: startNumber,
                 fails: 0
             }
-        };
+        });
 
-        await updateGitHubFile('counting.json', countingData);
+        countingCooldowns.delete(channel.id);
 
         const embed = new EmbedBuilder()
             .setTitle('🔢 Sistema de Contagem Configurado!')
@@ -96,7 +90,6 @@ module.exports = {
 
         await interaction.reply({ embeds: [embed] });
 
-        // Enviar mensagem inicial no canal
         const startEmbed = new EmbedBuilder()
             .setTitle('🎯 Contagem Iniciada!')
             .setDescription(`A contagem começou! Envie o número **${startNumber}** para iniciar.`)
@@ -106,18 +99,21 @@ module.exports = {
         await channel.send({ embeds: [startEmbed] });
     },
 
-    async handleStop(interaction, guildId, getGitHubFile, updateGitHubFile) {
-        const countingData = await getGitHubFile('counting.json');
+    async handleStop(interaction, guildId) {
+        const guildChannels = Array.from(countingChannels.entries())
+            .filter(([channelId, data]) => data.guildId === guildId);
         
-        if (!countingData[guildId] || !countingData[guildId].enabled) {
+        if (guildChannels.length === 0) {
             return await interaction.reply({ 
                 content: '❌ Não há sistema de contagem ativo neste servidor.', 
                 ephemeral: true 
             });
         }
 
-        countingData[guildId].enabled = false;
-        await updateGitHubFile('counting.json', countingData);
+        guildChannels.forEach(([channelId, data]) => {
+            countingChannels.delete(channelId);
+            countingCooldowns.delete(channelId);
+        });
 
         const embed = new EmbedBuilder()
             .setTitle('🛑 Sistema de Contagem Parado')
@@ -128,50 +124,51 @@ module.exports = {
         await interaction.reply({ embeds: [embed] });
     },
 
-    async handleStatus(interaction, guildId, getGitHubFile) {
-        const countingData = await getGitHubFile('counting.json');
+    async handleStatus(interaction, guildId) {
+        const guildChannels = Array.from(countingChannels.entries())
+            .filter(([channelId, data]) => data.guildId === guildId);
         
-        if (!countingData[guildId]) {
+        if (guildChannels.length === 0) {
             return await interaction.reply({ 
                 content: '❌ Sistema de contagem não configurado neste servidor.', 
                 ephemeral: true 
             });
         }
 
-        const data = countingData[guildId];
-        const channel = interaction.guild.channels.cache.get(data.channelId);
-
+        const [channelId, data] = guildChannels[0];
+        const channel = interaction.guild.channels.cache.get(channelId);
+        
         const embed = new EmbedBuilder()
             .setTitle('📊 Status da Contagem')
             .addFields(
                 { name: 'Canal', value: channel ? channel.toString() : 'Canal não encontrado', inline: true },
-                { name: 'Número Atual', value: data.currentNumber.toString(), inline: true },
-                { name: 'Status', value: data.enabled ? '🟢 Ativo' : '🔴 Inativo', inline: true },
-                { name: 'Total Contado', value: data.totalCount.toString(), inline: true },
-                { name: 'Record Máximo', value: data.records.highest.toString(), inline: true },
+                { name: 'Próximo Número', value: data.currentNumber.toString(), inline: true },
+                { name: 'Status', value: '🟢 Ativo', inline: true },
                 { name: 'Falhas Totais', value: data.records.fails.toString(), inline: true }
             )
-            .setColor(data.enabled ? '#00ff00' : '#ff0000')
+            .setColor('#00ff00')
             .setTimestamp();
 
         await interaction.reply({ embeds: [embed] });
     },
 
-    async handleReset(interaction, guildId, getGitHubFile, updateGitHubFile) {
-        const countingData = await getGitHubFile('counting.json');
+    async handleReset(interaction, guildId) {
+        const guildChannels = Array.from(countingChannels.entries())
+            .filter(([channelId, data]) => data.guildId === guildId);
         
-        if (!countingData[guildId]) {
+        if (guildChannels.length === 0) {
             return await interaction.reply({ 
                 content: '❌ Sistema de contagem não configurado neste servidor.', 
                 ephemeral: true 
             });
         }
 
-        countingData[guildId].currentNumber = 1;
-        countingData[guildId].lastUserId = null;
-        countingData[guildId].totalCount = 0;
+        const [channelId, data] = guildChannels[0];
+        const channel = interaction.guild.channels.cache.get(channelId);
 
-        await updateGitHubFile('counting.json', countingData);
+        data.currentNumber = 1;
+        countingChannels.set(channelId, data);
+        countingCooldowns.delete(channelId);
 
         const embed = new EmbedBuilder()
             .setTitle('🔄 Contagem Resetada')
@@ -181,8 +178,6 @@ module.exports = {
 
         await interaction.reply({ embeds: [embed] });
 
-        // Notificar no canal de contagem
-        const channel = interaction.guild.channels.cache.get(countingData[guildId].channelId);
         if (channel) {
             const resetEmbed = new EmbedBuilder()
                 .setTitle('🔄 Reset!')
@@ -195,63 +190,82 @@ module.exports = {
     },
 
     async handleCountingMessage(message, guildData, helpers) {
-        const { getGitHubFile, updateGitHubFile } = helpers;
+        const channelData = countingChannels.get(message.channel.id);
         
-        if (!guildData.enabled) return;
+        if (!channelData || !channelData.enabled) return;
+
+        const cooldownKey = `${message.channel.id}-${channelData.currentNumber}`;
+        const now = Date.now();
+        
+        if (countingCooldowns.has(cooldownKey)) {
+            const cooldownEnd = countingCooldowns.get(cooldownKey);
+            if (now < cooldownEnd) {
+                await message.delete().catch(() => {});
+                return;
+            }
+        }
 
         const messageContent = message.content.trim();
-        const expectedNumber = guildData.currentNumber;
+        
+        if (!/^\d+$/.test(messageContent)) {
+            await message.delete().catch(() => {});
+            await this.sendFailMessage(message, channelData, 'Envie apenas números, sem texto adicional!');
+            return;
+        }
+
         const userNumber = parseInt(messageContent);
 
-        // Verificar se é um número válido
-        if (isNaN(userNumber) || userNumber.toString() !== messageContent) {
+        if (isNaN(userNumber)) {
             await message.delete().catch(() => {});
-            await this.sendFailMessage(message, guildData, 'Envie apenas números!', helpers);
+            await this.sendFailMessage(message, channelData, 'Número inválido!');
             return;
         }
 
-        // Verificar se é o número correto
-        if (userNumber !== expectedNumber) {
+        if (userNumber !== channelData.currentNumber) {
             await message.delete().catch(() => {});
-            await this.sendFailMessage(message, guildData, `Número errado! O próximo número é **${expectedNumber}**`, helpers);
+            await this.sendFailMessage(message, channelData, `Número errado! O próximo número é **${channelData.currentNumber}**`);
             return;
         }
 
+        countingCooldowns.set(cooldownKey, now + 500);
+        
         await message.react('✅').catch(() => {});
-
-        const countingData = await getGitHubFile('counting.json');
-        const newData = countingData[message.guild.id];
         
-        newData.currentNumber = expectedNumber + 1;
-        newData.lastUserId = message.author.id;
-        newData.totalCount++;
-        
-        if (expectedNumber > newData.records.highest) {
-            newData.records.highest = expectedNumber;
-        }
+        channelData.currentNumber++;
+        countingChannels.set(message.channel.id, channelData);
 
-        await updateGitHubFile('counting.json', countingData);
+        setTimeout(() => {
+            countingCooldowns.delete(cooldownKey);
+        }, 1000);
 
-        // Milestones especiais
-        if (expectedNumber % 100 === 0) {
+        if (userNumber % 100 === 0) {
             const embed = new EmbedBuilder()
                 .setTitle('🎉 Milestone Alcançado!')
-                .setDescription(`Parabéns! Vocês chegaram ao número **${expectedNumber}**!`)
-                .setColor('#gold')
+                .setDescription(`Parabéns ${message.author}! Vocês chegaram ao número **${userNumber}**!`)
+                .setColor(0xFFD700)
                 .setTimestamp();
 
             await message.channel.send({ embeds: [embed] });
         }
     },
 
-    async sendFailMessage(message, guildData, reason, helpers) {
-        const { getGitHubFile, updateGitHubFile } = helpers;
+    async handleMessageUpdate(oldMessage, newMessage) {
+        const channelData = countingChannels.get(newMessage.channel.id);
         
+        if (!channelData || !channelData.enabled) return;
+        
+        if (/^\d+/.test(oldMessage.content.trim()) || /^\d+/.test(newMessage.content.trim())) {
+            await newMessage.delete().catch(() => {});
+            await this.sendFailMessage(newMessage, channelData, 'Mensagens editadas não são permitidas na contagem!');
+        }
+    },
+
+    async sendFailMessage(message, channelData, reason) {
         const embed = new EmbedBuilder()
             .setTitle('❌ Erro na Contagem!')
             .setDescription(reason)
             .addFields(
-                { name: 'Próximo Número', value: guildData.currentNumber.toString(), inline: true },
+                { name: 'Próximo Número', value: channelData.currentNumber.toString(), inline: true },
                 { name: 'Usuário', value: message.author.toString(), inline: true }
             )
             .setColor('#ff0000')
@@ -259,19 +273,11 @@ module.exports = {
 
         const failMessage = await message.channel.send({ embeds: [embed] });
 
-        // Deletar a mensagem de erro após 5 segundos
         setTimeout(async () => {
             await failMessage.delete().catch(() => {});
         }, 5000);
 
-        // Atualizar contador de falhas
-        const countingData = await getGitHubFile('counting.json');
-        countingData[message.guild.id].records.fails++;
-        await updateGitHubFile('counting.json', countingData);
-
-        // Reset da contagem em caso de erro
-        countingData[message.guild.id].currentNumber = 1;
-        countingData[message.guild.id].lastUserId = null;
-        await updateGitHubFile('counting.json', countingData);
+        channelData.records.fails++;
+        countingChannels.set(message.channel.id, channelData);
     }
 };
