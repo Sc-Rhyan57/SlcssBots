@@ -9,7 +9,8 @@
   },
   "dependencies": {
     "discord.js": "^14.14.1",
-    "@octokit/rest": "^20.0.2"
+    "@octokit/rest": "^20.0.2",
+    "axios": "^1.6.0"
   },
   "keywords": ["discord", "bot", "xp", "levels"],
   "author": "Seu Nome",

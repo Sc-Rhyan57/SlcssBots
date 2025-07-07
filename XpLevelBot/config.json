@@ -1,0 +1,16 @@
+{
+  "token": "",
+  "clientId": "",
+  "guildId": "",
+  "levelUpChannels": [
+    ""
+  ],
+  "adminRoles": [
+    ""
+  ],
+  "github": {
+    "token": "",
+    "owner": "Sc-rhyan57",
+    "repo": "Sluccs-assets"
+  }
+}
